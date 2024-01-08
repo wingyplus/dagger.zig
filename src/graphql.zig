@@ -72,5 +72,5 @@ test execute {
     var result = try execute(testing.allocator, q, .{ .token = token, .port = try std.fmt.parseInt(u16, port, 10) });
     defer result.deinit();
 
-    try testing.expectEqual("{\"data\":{\"container\":{\"from\":{\"withExec\":{\"stdout\":\"hello\n\"}}}}}", result.body);
+    try testing.expectEqualStrings("{\"data\":{\"container\":{\"from\":{\"withExec\":{\"stdout\":\"hello\\n\"}}}}}", result.body.?);
 }

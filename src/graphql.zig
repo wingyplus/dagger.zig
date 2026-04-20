@@ -26,11 +26,20 @@ test basicAuthUserPasswordAlloc {
 }
 
 /// Perform GraphQL query operation to Dagger.
-pub fn execute(allocator: std.mem.Allocator, q: []const u8, opts: QueryOptions) !http.Client.FetchResult {
-    var client: http.Client = .{ .allocator = allocator };
+pub fn request(allocator: std.mem.Allocator, io: std.Io, q: []const u8, opts: QueryOptions, response_writer: *std.Io.Writer) !http.Client.FetchResult {
+    var client: http.Client = .{ .allocator = allocator, .io = io };
     defer client.deinit();
 
-    const uri: std.Uri = .{ .scheme = "http", .user = null, .password = null, .host = "127.0.0.1", .port = opts.port, .path = "/query", .query = null, .fragment = null };
+    const uri: std.Uri = .{
+        .scheme = "http",
+        .user = null,
+        .password = null,
+        .host = .{ .percent_encoded = "127.0.0.1" },
+        .port = opts.port,
+        .path = .{ .percent_encoded = "/query" },
+        .query = null,
+        .fragment = null,
+    };
 
     // Prepare authorization.
     const user_pass = try basicAuthUserPasswordAlloc(allocator, opts.token, "");
@@ -38,27 +47,35 @@ pub fn execute(allocator: std.mem.Allocator, q: []const u8, opts: QueryOptions) 
     const basic_auth = try std.fmt.allocPrint(allocator, "Basic {s}", .{user_pass});
     defer allocator.free(basic_auth);
 
-    var headers: http.Headers = .{ .allocator = allocator, .owned = true };
-    defer headers.deinit();
-
-    try headers.append("authorization", basic_auth);
-    try headers.append("content-type", "application/json");
-
     const payload: Query = .{ .query = q };
-    const req_body = try json.stringifyAlloc(allocator, payload, .{});
-    defer allocator.free(req_body);
 
-    return try client.fetch(allocator, .{ .method = .POST, .location = .{ .uri = uri }, .headers = headers, .payload = .{ .string = req_body } });
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    var stringify = json.Stringify{ .writer = &out.writer };
+    try stringify.write(payload);
+    var body_list = out.toArrayList();
+    defer body_list.deinit(allocator);
+
+    return try client.fetch(.{
+        .method = .POST,
+        .location = .{ .uri = uri },
+        .headers = .{
+            .authorization = .{ .override = basic_auth },
+            .content_type = .{ .override = "application/json" },
+        },
+        .payload = body_list.items,
+        .response_writer = response_writer,
+    });
 }
 
-fn fetchenv(env: []const u8) !?[]const u8 {
-    return std.os.getenv(env);
-}
+test request {
+    const token = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_TOKEN");
+    defer testing.allocator.free(token);
+    const port = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_PORT");
+    defer testing.allocator.free(port);
 
-test execute {
-    const token = (try fetchenv("DAGGER_SESSION_TOKEN")).?;
-    const port = (try fetchenv("DAGGER_SESSION_PORT")).?;
-    const q =
+    var response: std.Io.Writer.Allocating = .init(testing.allocator);
+
+    const query =
         \\query {
         \\  container {
         \\    from(address: "nginx") {
@@ -69,8 +86,20 @@ test execute {
         \\  }
         \\}
     ;
-    var result = try execute(testing.allocator, q, .{ .token = token, .port = try std.fmt.parseInt(u16, port, 10) });
-    defer result.deinit();
+    const result = try request(
+        testing.allocator,
+        testing.io,
+        query,
+        .{
+            .token = token,
+            .port = try std.fmt.parseInt(u16, port, 10),
+        },
+        &response.writer,
+    );
+    try testing.expectEqual(.ok, result.status);
 
-    try testing.expectEqualStrings("{\"data\":{\"container\":{\"from\":{\"withExec\":{\"stdout\":\"hello\\n\"}}}}}", result.body.?);
+    var body = response.toArrayList();
+    defer body.deinit(testing.allocator);
+
+    try testing.expectEqualStrings("{\"data\":{\"container\":{\"from\":{\"withExec\":{\"stdout\":\"hello\\n\"}}}}}", body.items);
 }

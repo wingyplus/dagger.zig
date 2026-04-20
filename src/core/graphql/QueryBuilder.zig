@@ -17,17 +17,19 @@ pub const Arg = struct {
 pub const SelectOpts = struct {
     alias: []const u8 = "",
     args: []const Arg = &.{},
+    sub_fields: []const []const u8 = &.{},
 };
 
 pub const Selection = struct {
     name: []const u8,
     alias: []const u8,
     args: []const Arg,
+    sub_fields: []const []const u8,
     prev: ?*Selection,
 
     pub fn init(allocator: std.mem.Allocator) !*Selection {
         const sel = try allocator.create(Selection);
-        sel.* = .{ .name = "", .alias = "", .args = &.{}, .prev = null };
+        sel.* = .{ .name = "", .alias = "", .args = &.{}, .sub_fields = &.{}, .prev = null };
         return sel;
     }
 
@@ -37,6 +39,7 @@ pub const Selection = struct {
             .name = name,
             .alias = opts.alias,
             .args = try allocator.dupe(Arg, opts.args),
+            .sub_fields = try allocator.dupe([]const u8, opts.sub_fields),
             .prev = self,
         };
         return sel;
@@ -80,6 +83,16 @@ pub const Selection = struct {
             }
         }
 
+        const last = path.items[path.items.len - 1];
+        if (last.sub_fields.len > 0) {
+            try aw.writer.writeByte('{');
+            for (last.sub_fields, 0..) |f, i| {
+                if (i > 0) try aw.writer.writeByte(' ');
+                try aw.writer.writeAll(f);
+            }
+            try aw.writer.writeByte('}');
+        }
+
         for (path.items) |_| try aw.writer.writeByte('}');
 
         var result_list = aw.toArrayList();
@@ -89,6 +102,7 @@ pub const Selection = struct {
 
     pub fn deinit(self: *Selection, allocator: std.mem.Allocator) void {
         allocator.free(self.args);
+        allocator.free(self.sub_fields);
     }
 };
 
@@ -121,8 +135,8 @@ test "simple chain: query{a{b}}" {
     const alloc = arena.allocator();
 
     const root = try Selection.init(alloc);
-    const q = try (try root.select(alloc, "a", .{}))
-        .select(alloc, "b", .{});
+    var q = try root.select(alloc, "a", .{});
+    q = try root.select(alloc, "b", .{});
 
     try testing.expectEqualStrings("query{a{b}}", try q.build(alloc));
 }
@@ -133,10 +147,9 @@ test "args: alpine image file query" {
     const alloc = arena.allocator();
 
     const root = try Selection.init(alloc);
-    const q = try (try (try root
-        .select(alloc, "core", .{}))
-        .select(alloc, "image", .{ .args = &.{.{ .name = "ref", .value = .{ .string = "alpine" } }} }))
-        .select(alloc, "file", .{ .args = &.{.{ .name = "path", .value = .{ .string = "/etc/alpine-release" } }} });
+    var q = try root.select(alloc, "core", "image");
+    q = q.select(alloc, "image", .{ .args = &.{.{ .name = "ref", .value = .{ .string = "alpine" } }} });
+    q = q.select(alloc, "file", .{ .args = &.{.{ .name = "path", .value = .{ .string = "/etc/alpine-release" } }} });
 
     try testing.expectEqualStrings(
         \\query{core{image(ref:"alpine"){file(path:"/etc/alpine-release")}}}
@@ -187,6 +200,18 @@ test "int and bool argument types" {
     } });
 
     try testing.expectEqualStrings("query{resize(width:1920, crop:true)}", try q.build(alloc));
+}
+
+test "sub_fields: multiple fields on last node" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const root = try Selection.init(alloc);
+    var q = try root.select(alloc, "a", .{});
+    q = try q.select(alloc, "b", .{ .sub_fields = &.{ "x", "y" } });
+
+    try testing.expectEqualStrings("query{a{b{x y}}}", try q.build(alloc));
 }
 
 test "string escaping: quotes and newlines" {

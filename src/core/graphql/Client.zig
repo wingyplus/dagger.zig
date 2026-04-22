@@ -3,7 +3,7 @@ const testing = std.testing;
 
 const GraphQLClient = @This();
 
-const Query = struct {
+pub const Query = struct {
     query: []const u8,
 };
 

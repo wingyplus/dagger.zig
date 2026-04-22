@@ -3,13 +3,18 @@ const testing = std.testing;
 
 const QueryBuilder = @This();
 
-// TODO: support object input.
+pub const InputField = struct {
+    name: []const u8,
+    value: Value,
+};
+
 pub const Value = union(enum) {
     string: []const u8,
     int: i64,
     float: f64,
     boolean: bool,
     array: []const Value,
+    object: []const InputField,
     null,
 
     pub fn build(value: Value, writer: *std.Io.Writer) !void {
@@ -36,6 +41,16 @@ pub const Value = union(enum) {
                     try item.build(writer);
                 }
                 try writer.writeByte(']');
+            },
+            .object => |fields| {
+                try writer.writeByte('{');
+                for (fields, 0..) |f, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try writer.writeAll(f.name);
+                    try writer.writeByte(':');
+                    try f.value.build(writer);
+                }
+                try writer.writeByte('}');
             },
             .null => try writer.writeAll("null"),
         }
@@ -113,8 +128,6 @@ pub fn build(self: *QueryBuilder, allocator: std.mem.Allocator) ![]const u8 {
     return try allocator.dupe(u8, result_list.items);
 }
 
-
-
 test "simple chain: query{a{b}}" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -134,8 +147,20 @@ test "args: alpine image file query" {
 
     var qb = QueryBuilder.query();
     try qb.select(alloc, .{ .name = "core" });
-    try qb.select(alloc, .{ .name = "image", .args = &.{.{ .name = "ref", .value = .{ .string = "alpine" } }} });
-    try qb.select(alloc, .{ .name = "file", .args = &.{.{ .name = "path", .value = .{ .string = "/etc/alpine-release" } }} });
+    try qb.select(alloc, .{
+        .name = "image",
+        .args = &.{.{
+            .name = "ref",
+            .value = .{ .string = "alpine" },
+        }},
+    });
+    try qb.select(alloc, .{
+        .name = "file",
+        .args = &.{.{
+            .name = "path",
+            .value = .{ .string = "/etc/alpine-release" },
+        }},
+    });
 
     try testing.expectEqualStrings(
         \\query{core{image(ref:"alpine"){file(path:"/etc/alpine-release")}}}
@@ -151,7 +176,10 @@ test "alias: query{foo:field(path:\"/etc\")}" {
     try qb.select(alloc, .{
         .name = "field",
         .alias = "foo",
-        .args = &.{.{ .name = "path", .value = .{ .string = "/etc" } }},
+        .args = &.{.{
+            .name = "path",
+            .value = .{ .string = "/etc" },
+        }},
     });
 
     try testing.expectEqualStrings(
@@ -165,10 +193,13 @@ test "multiple args on one selection" {
     const alloc = arena.allocator();
 
     var qb = QueryBuilder.query();
-    try qb.select(alloc, .{ .name = "op", .args = &.{
-        .{ .name = "first", .value = .{ .string = "a" } },
-        .{ .name = "second", .value = .{ .string = "b" } },
-    } });
+    try qb.select(alloc, .{
+        .name = "op",
+        .args = &.{
+            .{ .name = "first", .value = .{ .string = "a" } },
+            .{ .name = "second", .value = .{ .string = "b" } },
+        },
+    });
 
     try testing.expectEqualStrings(
         \\query{op(first:"a", second:"b")}
@@ -181,14 +212,71 @@ test "int and bool argument types" {
     const alloc = arena.allocator();
 
     var qb = QueryBuilder.query();
-    try qb.select(alloc, .{ .name = "resize", .args = &.{
-        .{ .name = "width", .value = .{ .int = 1920 } },
-        .{ .name = "crop", .value = .{ .boolean = true } },
-    } });
+    try qb.select(alloc, .{
+        .name = "resize",
+        .args = &.{
+            .{ .name = "width", .value = .{ .int = 1920 } },
+            .{ .name = "crop", .value = .{ .boolean = true } },
+        },
+    });
 
     try testing.expectEqualStrings("query{resize(width:1920, crop:true)}", try qb.build(alloc));
 }
 
+test "input object argument" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var qb = QueryBuilder.query();
+    try qb.select(alloc, .{
+        .name = "createUser",
+        .args = &.{.{
+            .name = "input",
+            .value = .{
+                .object = &.{
+                    .{ .name = "name", .value = .{ .string = "Alice" } },
+                    .{ .name = "age", .value = .{ .int = 30 } },
+                },
+            },
+        }},
+    });
+
+    try testing.expectEqualStrings(
+        \\query{createUser(input:{name:"Alice", age:30})}
+    , try qb.build(alloc));
+}
+
+test "nested input object" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var qb = QueryBuilder.query();
+    try qb.select(alloc, .{
+        .name = "op",
+        .args = &.{.{
+            .name = "opts",
+            .value = .{
+                .object = &.{
+                    .{
+                        .name = "filter",
+                        .value = .{
+                            .object = &.{
+                                .{ .name = "active", .value = .{ .boolean = true } },
+                            },
+                        },
+                    },
+                },
+            },
+        }},
+    });
+
+    try testing.expectEqualStrings(
+        "query{op(opts:{filter:{active:true}})}",
+        try qb.build(alloc),
+    );
+}
 
 test "string escaping: quotes and newlines" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -196,7 +284,15 @@ test "string escaping: quotes and newlines" {
     const alloc = arena.allocator();
 
     var qb = QueryBuilder.query();
-    try qb.select(alloc, .{ .name = "echo", .args = &.{.{ .name = "msg", .value = .{ .string = "say \"hello\"\nworld" } }} });
+    try qb.select(alloc, .{
+        .name = "echo",
+        .args = &.{
+            .{
+                .name = "msg",
+                .value = .{ .string = "say \"hello\"\nworld" },
+            },
+        },
+    });
 
     try testing.expectEqualStrings(
         \\query{echo(msg:"say \"hello\"\nworld")}

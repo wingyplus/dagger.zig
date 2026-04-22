@@ -136,7 +136,7 @@ test "simple chain: query{a{b}}" {
 
     const root = try Selection.init(alloc);
     var q = try root.select(alloc, "a", .{});
-    q = try root.select(alloc, "b", .{});
+    q = try q.select(alloc, "b", .{});
 
     try testing.expectEqualStrings("query{a{b}}", try q.build(alloc));
 }
@@ -147,9 +147,9 @@ test "args: alpine image file query" {
     const alloc = arena.allocator();
 
     const root = try Selection.init(alloc);
-    var q = try root.select(alloc, "core", "image");
-    q = q.select(alloc, "image", .{ .args = &.{.{ .name = "ref", .value = .{ .string = "alpine" } }} });
-    q = q.select(alloc, "file", .{ .args = &.{.{ .name = "path", .value = .{ .string = "/etc/alpine-release" } }} });
+    var q = try root.select(alloc, "core", .{});
+    q = try q.select(alloc, "image", .{ .args = &.{.{ .name = "ref", .value = .{ .string = "alpine" } }} });
+    q = try q.select(alloc, "file", .{ .args = &.{.{ .name = "path", .value = .{ .string = "/etc/alpine-release" } }} });
 
     try testing.expectEqualStrings(
         \\query{core{image(ref:"alpine"){file(path:"/etc/alpine-release")}}}

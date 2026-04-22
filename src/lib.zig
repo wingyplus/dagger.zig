@@ -1,6 +1,7 @@
-test {
-    _ = @import("./core/graphql.zig");
-    _ = @import("./core/graphql/Client.zig");
-    _ = @import("./core/graphql/QueryBuilder.zig");
-}
+const testing = @import("std").testing;
 
+pub const core = @import("./core.zig");
+
+test {
+    testing.refAllDecls(@This());
+}

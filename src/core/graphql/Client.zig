@@ -65,12 +65,12 @@ pub fn request(self: *GraphQLClient, query: Query, response_writer: *std.Io.Writ
 }
 
 test "GraphQLClient.request" {
-    const token = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_TOKEN");
-    defer testing.allocator.free(token);
-    const port = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_PORT");
-    defer testing.allocator.free(port);
+    var env_map = try testing.environ.createMap(testing.allocator);
+    defer env_map.deinit();
+    const token = env_map.get("DAGGER_SESSION_TOKEN") orelse return error.MissingSessionToken;
+    const port_str = env_map.get("DAGGER_SESSION_PORT") orelse return error.MissingSessionPort;
 
-    var client = GraphQLClient.init(testing.allocator, testing.io, token, try std.fmt.parseInt(u16, port, 10));
+    var client = GraphQLClient.init(testing.allocator, testing.io, token, try std.fmt.parseInt(u16, port_str, 10));
     defer client.deinit();
 
     var response: std.Io.Writer.Allocating = .init(testing.allocator);

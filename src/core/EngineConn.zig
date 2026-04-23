@@ -44,7 +44,7 @@ pub fn deinit(self: *EngineConn) void {
 }
 
 /// Execute a GraphQL query and return the leaf node value.
-pub fn execute(self: *EngineConn, allocator: std.mem.Allocator, builder: *QueryBuilder) !std.json.Value {
+pub fn executeRaw(self: *EngineConn, allocator: std.mem.Allocator, builder: *QueryBuilder) !std.json.Value {
     const query_str = try builder.build(allocator);
     defer allocator.free(query_str);
 
@@ -81,16 +81,19 @@ pub fn execute(self: *EngineConn, allocator: std.mem.Allocator, builder: *QueryB
     return current;
 }
 
-test "execute: container echo hello" {
-    const token = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_TOKEN");
-    defer testing.allocator.free(token);
-    const port_str = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_PORT");
-    defer testing.allocator.free(port_str);
+/// Execute a GraphQL query and return the parsed result.
+pub fn execute(self: *EngineConn, builder: *QueryBuilder, comptime ResponseType: type) !ResponseType {
+    const val = try self.executeRaw(self.allocator, builder);
+    const parsed = try std.json.parseFromValue(ResponseType, self.allocator, val, .{
+        .ignore_unknown_fields = true,
+        .allocate = .alloc_always,
+    });
+    return parsed.value;
+}
 
-    var envmap = std.process.Environ.Map.init(testing.allocator);
+test "executeRaw: container echo hello" {
+    var envmap = try testing.environ.createMap(testing.allocator);
     defer envmap.deinit();
-    try envmap.put("DAGGER_SESSION_TOKEN", token);
-    try envmap.put("DAGGER_SESSION_PORT", port_str);
 
     var conn = try init(testing.allocator, testing.io, envmap);
     defer conn.deinit();
@@ -126,22 +129,15 @@ test "execute: container echo hello" {
     });
     try qb.select(alloc, .{ .name = "stdout" });
 
-    const val = try conn.execute(alloc, &qb);
+    const val = try conn.executeRaw(alloc, &qb);
 
     try testing.expect(val == .string);
     try testing.expectEqualStrings("hello\n", val.string);
 }
 
-test "execute: container envVariables" {
-    const token = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_TOKEN");
-    defer testing.allocator.free(token);
-    const port_str = try testing.environ.getAlloc(testing.allocator, "DAGGER_SESSION_PORT");
-    defer testing.allocator.free(port_str);
-
-    var envmap = std.process.Environ.Map.init(testing.allocator);
+test "executeRaw: container envVariables" {
+    var envmap = try testing.environ.createMap(testing.allocator);
     defer envmap.deinit();
-    try envmap.put("DAGGER_SESSION_TOKEN", token);
-    try envmap.put("DAGGER_SESSION_PORT", port_str);
 
     var conn = try init(testing.allocator, testing.io, envmap);
     defer conn.deinit();
@@ -170,7 +166,7 @@ test "execute: container envVariables" {
     });
     try qb.select(alloc, .{ .name = "envVariables { name value }" });
 
-    const val = try conn.execute(alloc, &qb);
+    const val = try conn.executeRaw(alloc, &qb);
 
     try testing.expect(val == .array);
     var found = false;

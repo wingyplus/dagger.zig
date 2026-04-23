@@ -32,7 +32,7 @@ pub fn main(init: std.process.Init) !void {
     defer output_file.close(io);
 
     var gen = generator.Generator.init(allocator, parsed.value);
-    
+
     var write_buf: [4096]u8 = undefined;
     var writer = output_file.writer(io, &write_buf);
     try gen.generate(&writer.interface);

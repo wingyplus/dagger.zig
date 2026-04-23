@@ -26,6 +26,23 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(lib);
 
+    const codegen_exe = b.addExecutable(.{
+        .name = "codegen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/codegen/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(codegen_exe);
+
+    const run_codegen_cmd = b.addRunArtifact(codegen_exe);
+    if (b.args) |args| {
+        run_codegen_cmd.addArgs(args);
+    }
+    const codegen_step = b.step("codegen", "Generate Zig SDK from introspection JSON");
+    codegen_step.dependOn(&run_codegen_cmd.step);
+
     const lib_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lib.zig"),
